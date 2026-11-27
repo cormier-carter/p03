@@ -150,6 +150,40 @@ static pid_t run_command(command_t *cmd, int in_fd, int out_fd) {
     if (pid > 0)
         return pid;
 
+    if (cmd->input_file != NULL) {
+        if (in_fd != STDIN_FILENO)
+            close(in_fd);
+        in_fd = open(cmd->input_file, O_RDONLY);
+        if (in_fd == -1) {
+            perror(cmd->input_file);
+            _exit(1);
+        }
+    }
+    if (cmd->output_file != NULL) {
+        if (out_fd != STDOUT_FILENO)
+            close(out_fd);
+        out_fd = open(cmd->output_file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if (out_fd == -1) {
+            perror(cmd->output_file);
+            _exit(1);
+        }
+    }
+
+    if (in_fd != STDIN_FILENO) {
+        if (dup2(in_fd, STDIN_FILENO) == -1) {
+            perror("dup2");
+            _exit(1);
+        }
+        close(in_fd);
+    }
+    if (out_fd != STDOUT_FILENO) {
+        if (dup2(out_fd, STDOUT_FILENO) == -1) {
+            perror("dup2");
+            _exit(1);
+        }
+        close(out_fd);
+    }
+
     execve(cmd->argv[0], cmd->argv, environ);
     perror(cmd->argv[0]);
     _exit(127);
