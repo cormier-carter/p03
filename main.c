@@ -12,6 +12,7 @@
  */
 
 #define _POSIX_C_SOURCE 200809L
+#include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+
+extern char **environ;
 
 /** A 100-character line can also have a newline and a '\0'. */
 #define MAX_LINE 102
@@ -138,10 +141,18 @@ static int parse_pipeline(char *tokens[], int num_tokens, command_t commands[]) 
  *
  * Returns the child's process ID, or -1 if no child was started.
  */
-__attribute__((unused))
 static pid_t run_command(command_t *cmd, int in_fd, int out_fd) {
-    // TODO (Checkpoints 2 and 3)
-    return -1;
+    pid_t pid = fork();
+    if (pid == -1) {
+        perror("fork");
+        return -1;
+    }
+    if (pid > 0)
+        return pid;
+
+    execve(cmd->argv[0], cmd->argv, environ);
+    perror(cmd->argv[0]);
+    _exit(127);
 }
 
 /**
@@ -150,7 +161,27 @@ static pid_t run_command(command_t *cmd, int in_fd, int out_fd) {
  * waits for all of them and prints each one's exit status, in order.
  */
 static void run_pipeline(command_t commands[], int num_commands) {
-    // TODO (Checkpoints 2 and 4)
+    if (num_commands != 1)
+        return;
+
+    pid_t pid = run_command(&commands[0], STDIN_FILENO, STDOUT_FILENO);
+    if (pid == -1)
+        return;
+
+    int status;
+    pid_t waited;
+    do {
+        waited = waitpid(pid, &status, 0);
+    } while (waited == -1 && errno == EINTR);
+
+    if (waited == -1) {
+        perror("waitpid");
+        return;
+    }
+    if (WIFEXITED(status))
+        printf("exit status: %d\n", WEXITSTATUS(status));
+    else if (WIFSIGNALED(status))
+        printf("exit status: %d\n", 128 + WTERMSIG(status));
 }
 
 /**
