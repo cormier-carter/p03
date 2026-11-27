@@ -137,11 +137,13 @@ static int parse_pipeline(char *tokens[], int num_tokens, command_t commands[]) 
 /**
  * Starts `cmd` in a child process. The child reads its standard input
  * from `in_fd` and writes its standard output to `out_fd`, unless the
- * command redirects them to a file. Does not wait for the child.
+ * command redirects them to a file. The next command's pipe read end
+ * is next_read_fd, or -1 when there is no next pipe. Does not wait.
  *
  * Returns the child's process ID, or -1 if no child was started.
  */
-static pid_t run_command(command_t *cmd, int in_fd, int out_fd) {
+static pid_t run_command(command_t *cmd, int in_fd, int out_fd,
+                         int next_read_fd) {
     pid_t pid = fork();
     if (pid == -1) {
         perror("fork");
@@ -149,6 +151,9 @@ static pid_t run_command(command_t *cmd, int in_fd, int out_fd) {
     }
     if (pid > 0)
         return pid;
+
+    if (next_read_fd != -1)
+        close(next_read_fd);
 
     if (cmd->input_file != NULL) {
         if (in_fd != STDIN_FILENO)
@@ -195,27 +200,62 @@ static pid_t run_command(command_t *cmd, int in_fd, int out_fd) {
  * waits for all of them and prints each one's exit status, in order.
  */
 static void run_pipeline(command_t commands[], int num_commands) {
-    if (num_commands != 1)
-        return;
+    pid_t children[MAX_COMMANDS];
+    int started = 0;
+    int in_fd = STDIN_FILENO;
 
-    pid_t pid = run_command(&commands[0], STDIN_FILENO, STDOUT_FILENO);
-    if (pid == -1)
-        return;
+    for (int i = 0; i < num_commands; i++) {
+        int out_fd = STDOUT_FILENO;
+        int next_read_fd = -1;
+        if (i + 1 < num_commands) {
+            int pipe_fds[2];
+            if (pipe(pipe_fds) == -1) {
+                perror("pipe");
+                break;
+            }
+            next_read_fd = pipe_fds[0];
+            out_fd = pipe_fds[1];
+        }
 
-    int status;
-    pid_t waited;
-    do {
-        waited = waitpid(pid, &status, 0);
-    } while (waited == -1 && errno == EINTR);
+        pid_t pid = run_command(&commands[i], in_fd, out_fd, next_read_fd);
 
-    if (waited == -1) {
-        perror("waitpid");
-        return;
+        if (in_fd != STDIN_FILENO)
+            close(in_fd);
+        // Readers cannot see EOF while the parent still holds a write end.
+        if (out_fd != STDOUT_FILENO)
+            close(out_fd);
+        in_fd = next_read_fd;
+
+        if (pid == -1)
+            break;
+        children[started] = pid;
+        started++;
     }
-    if (WIFEXITED(status))
-        printf("exit status: %d\n", WEXITSTATUS(status));
-    else if (WIFSIGNALED(status))
-        printf("exit status: %d\n", 128 + WTERMSIG(status));
+    if (in_fd != -1 && in_fd != STDIN_FILENO)
+        close(in_fd);
+
+    int statuses[MAX_COMMANDS];
+    for (int i = 0; i < started; i++) {
+        pid_t waited;
+        do {
+            waited = waitpid(children[i], &statuses[i], 0);
+        } while (waited == -1 && errno == EINTR);
+
+        if (waited == -1) {
+            perror("waitpid");
+            statuses[i] = -1;
+        }
+    }
+
+    for (int i = 0; i < started; i++) {
+        int status = statuses[i];
+        if (status == -1)
+            continue;
+        if (WIFEXITED(status))
+            printf("exit status: %d\n", WEXITSTATUS(status));
+        else if (WIFSIGNALED(status))
+            printf("exit status: %d\n", 128 + WTERMSIG(status));
+    }
 }
 
 /**
