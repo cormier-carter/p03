@@ -20,8 +20,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
-/** The longest input line is 100 characters, plus 1 for the '\0' */
-#define MAX_LINE 101
+/** A 100-character line can also have a newline and a '\0'. */
+#define MAX_LINE 102
 
 /** A 100-character line has at most 50 whitespace-separated tokens */
 #define MAX_TOKENS 50
@@ -50,15 +50,22 @@ typedef struct {
  * Splits `line` into its whitespace-separated tokens and stores a pointer
  * to each one in `tokens`. Changes the contents of `line`.
  *
- * Returns the number of tokens.
- *
- * __attribute__((unused)) stops the compiler from warning that a function
- * is never called. You can remove it once you call the function.
+ * Returns the number of tokens, or -1 if the array would overflow.
  */
-__attribute__((unused))
 static int tokenize(char *line, char *tokens[]) {
-    // TODO (Checkpoint 1)
-    return 0;
+    const char *whitespace = " \t\n\r\f\v";
+    char *saveptr = NULL;
+    char *token = strtok_r(line, whitespace, &saveptr);
+    int count = 0;
+
+    while (token != NULL) {
+        if (count == MAX_TOKENS)
+            return -1;
+        tokens[count] = token;
+        count++;
+        token = strtok_r(NULL, whitespace, &saveptr);
+    }
+    return count;
 }
 
 /**
@@ -68,10 +75,60 @@ static int tokenize(char *line, char *tokens[]) {
  * Returns the number of commands, or -1 if the tokens are not a valid
  * pipeline.
  */
-__attribute__((unused))
 static int parse_pipeline(char *tokens[], int num_tokens, command_t commands[]) {
-    // TODO (Checkpoint 1)
-    return -1;
+    if (num_tokens <= 0)
+        return -1;
+
+    int index = 0;
+    int num_commands = 0;
+
+    while (index < num_tokens) {
+        command_t *cmd = &commands[num_commands];
+        int argc = 0;
+        cmd->input_file = NULL;
+        cmd->output_file = NULL;
+
+        while (index < num_tokens && strcmp(tokens[index], "|") != 0) {
+            char *token = tokens[index];
+            index++;
+
+            if (strcmp(token, "<") == 0 || strcmp(token, ">") == 0) {
+                if (index == num_tokens)
+                    return -1;
+
+                char *filename = tokens[index];
+                if (strcmp(filename, "<") == 0 || strcmp(filename, ">") == 0 ||
+                    strcmp(filename, "|") == 0)
+                    return -1;
+
+                if (token[0] == '<') {
+                    if (cmd->input_file != NULL)
+                        return -1;
+                    cmd->input_file = filename;
+                } else {
+                    if (cmd->output_file != NULL)
+                        return -1;
+                    cmd->output_file = filename;
+                }
+                index++;
+            } else {
+                cmd->argv[argc] = token;
+                argc++;
+            }
+        }
+
+        if (argc == 0)
+            return -1;
+        cmd->argv[argc] = NULL;
+        num_commands++;
+
+        if (index < num_tokens) {
+            index++;
+            if (index == num_tokens)
+                return -1;
+        }
+    }
+    return num_commands;
 }
 
 /**
@@ -92,7 +149,6 @@ static pid_t run_command(command_t *cmd, int in_fd, int out_fd) {
  * standard output connected to the next command's standard input. Then
  * waits for all of them and prints each one's exit status, in order.
  */
-__attribute__((unused))
 static void run_pipeline(command_t commands[], int num_commands) {
     // TODO (Checkpoints 2 and 4)
 }
@@ -103,12 +159,19 @@ static void run_pipeline(command_t commands[], int num_commands) {
  * pipeline.
  */
 static void parse_and_run_command(char *line) {
-    // TODO (Checkpoint 1): this is not the correct way to check for the
-    // exit command. For example, the line "  exit  " should also exit.
-    if (strcmp(line, "exit") == 0) {
+    char *tokens[MAX_TOKENS];
+    int num_tokens = tokenize(line, tokens);
+    if (num_tokens == 1 && strcmp(tokens[0], "exit") == 0)
         exit(0);
+
+    command_t commands[MAX_COMMANDS];
+    int num_commands = parse_pipeline(tokens, num_tokens, commands);
+    if (num_commands == -1) {
+        fprintf(stderr, "Invalid command\n");
+        return;
     }
-    fprintf(stderr, "Not implemented.\n");
+
+    run_pipeline(commands, num_commands);
 }
 
 int main(void) {
